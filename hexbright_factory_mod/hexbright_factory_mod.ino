@@ -1,16 +1,11 @@
 /* 
   Factory firmware for HexBright FLEX with Modifications by Ryan Smiley
-  My Version v.1  Jan 4, 2014
+  My Version v.1  Jan 5, 2014
   Factory Version v2.4  Dec 6, 2012
 */
 
 #include <math.h>
 #include <Wire.h>
-
-//#define BUILD_HACK
-//#include <hexbright.h>
-
-//hexbright hb;
 
 #define HOLD_TIME 250 // milliseconds before going to strobe
 #define OFF_TIME 650 // milliseconds before going off on the next normal button press
@@ -45,8 +40,8 @@
 #define MODE_HIGH               3
 #define MODE_STROBE             4
 #define MODE_STROBE_PREVIEW     5
-//#define MODE_BLINKING           4
-//#define MODE_BLINKING_PREVIEW   5
+#define MODE_MORSE              6
+#define MODE_MORSE_PREVIEW      7
 
 
 // State
@@ -55,10 +50,15 @@ unsigned long btnTime = 0;
 boolean btnDown = false;
 unsigned long lastButtonPress = millis();
 unsigned long lastChangeMode = millis();
+long previousMillis = 0;
+unsigned long currentMillis = 0;
 byte pastMode = 1;
+
 //Morse Code
-char message[] = "SOS SOS SOS SOS";
-int millisPerBeat = 100;
+char message[] = "SOS  ";
+int millisPerBeat = 125;
+byte endMorse = false;
+
 // Low byte  = morse code, LSB first, 0=dot 1=dash
 word morse[] = {
   0x0202, // A .-
@@ -115,8 +115,10 @@ void setup()
   pinMode(DPIN_GLED,     OUTPUT);
   pinMode(DPIN_DRV_MODE, OUTPUT);
   pinMode(DPIN_DRV_EN,   OUTPUT);
+  pinMode(DPIN_ACC_INT,  INPUT);
   digitalWrite(DPIN_DRV_MODE, LOW);
   digitalWrite(DPIN_DRV_EN,   LOW);
+  digitalWrite(DPIN_ACC_INT,  HIGH);
   
   // Initialize serial busses
   Serial.begin(9600);
@@ -193,59 +195,172 @@ void loop()
       mode = MODE_LOW;
     }
   }
-
+  
+  // Check if the accelerometer wants to interrupt
+  byte tapped = 0, shaked = 0;
+  if (!digitalRead(DPIN_ACC_INT))
+  {
+    Wire.beginTransmission(ACC_ADDRESS);
+    Wire.write(ACC_REG_TILT);
+    Wire.endTransmission(false);       // End, but do not stop!
+    Wire.requestFrom(ACC_ADDRESS, 1);  // This one stops.
+    byte tilt = Wire.read();
+    
+    if (time-lastAccTime > 500)
+    {
+      lastAccTime = time;
+  
+      tapped = !!(tilt & 0x20);
+      shaked = !!(tilt & 0x80);
+  
+      if (tapped) Serial.println("Tap!");
+      if (shaked) Serial.println("Shake!");
+    }
+  }
+  
   // Do whatever this mode does
   switch (mode)
   {
   case MODE_STROBE:
   case MODE_STROBE_PREVIEW:
-//    for (int i = 0; i < sizeof(message); i++)
-//    {
-//      char ch = message[i];
-//      if (ch == ' ')
-//      {
-//        // 7 beats between words, but 3 have already passed
-//        // at the end of the last character
-//        delay(millisPerBeat * 4);
-//      }
-//      else
-//      {
-//        // Remap ASCII to the morse table
-//        if      (ch >= 'A' && ch <= 'Z') ch -= 'A';
-//        else if (ch >= 'a' && ch <= 'z') ch -= 'a';
-//        else if (ch >= '0' && ch <= '9') ch -= '0' - 26;
-//        else continue;
-//        
-//        // Extract the symbols and length
-//        byte curChar  = morse[ch] & 0x00FF;
-//        byte nSymbols = morse[ch] >> 8;
-//        
-//        // Play each symbol
-//        for (int j = 0; j < nSymbols; j++)
-//        {
-//          digitalWrite(DPIN_DRV_EN, HIGH);
-//          if (curChar & 1)  // Dash - 3 beats
-//            delay(millisPerBeat * 3);
-//          else              // Dot - 1 beat
-//            delay(millisPerBeat);
-//          digitalWrite(DPIN_DRV_EN, LOW);
-//          // One beat between symbols
-//          delay(millisPerBeat);
-//          curChar >>= 1;
-//        }
-//        // 3 beats between characters, but one already
-//        // passed after the last symbol.
-//        delay(millisPerBeat * 2);
-//      } 
-//    }
-
     //Dazzle Strobe
     if (time-lastTime < 10) break;
       lastTime = time;
     digitalWrite(DPIN_DRV_EN, random(4)<1);
     pastModeReset = 0;
+    break;   
+  case MODE_MORSE:
+  case MODE_MORSE_PREVIEW:
     //Constant Strobe
     //digitalWrite(DPIN_DRV_EN, (time%225)<25);
+    endMorse = false;
+    byte buttonStillPressed = true;
+    for (int i = 0; i < sizeof(message); i++)
+    {
+      if (digitalRead(DPIN_RLED_SW) && buttonStillPressed==false){
+        Serial.println("Button Pressed in Morse");
+        endMorse = true; 
+        break; 
+      } else if(!digitalRead(DPIN_RLED_SW)){
+        buttonStillPressed=false;
+      }
+      
+      char ch = message[i];
+      if (ch == ' ')
+      {
+        // 7 beats between words, but 3 have already passed
+        // at the end of the last character
+        Serial.println("Writing SPACES");
+        currentMillis = millis();
+        previousMillis = 0;
+        while (previousMillis < millisPerBeat * 4 ){
+           previousMillis = millis() - currentMillis;
+           if (digitalRead(DPIN_RLED_SW) && buttonStillPressed==false){
+             Serial.println("Button Pressed in Morse");
+             endMorse = true; 
+             break;
+           } else if(!digitalRead(DPIN_RLED_SW)){
+             buttonStillPressed=false;
+           }
+        }
+        //delay(millisPerBeat * 4);
+      }
+      else
+      {
+        // Remap ASCII to the morse table
+        if      (ch >= 'A' && ch <= 'Z') ch -= 'A';
+        else if (ch >= 'a' && ch <= 'z') ch -= 'a';
+        else if (ch >= '0' && ch <= '9') ch -= '0' - 26;
+        else continue;
+        
+        // Extract the symbols and length
+        byte curChar  = morse[ch] & 0x00FF;
+        byte nSymbols = morse[ch] >> 8;
+        
+        // Play each symbol
+        for (int j = 0; j < nSymbols; j++)
+        {
+          
+          if (digitalRead(DPIN_RLED_SW) && buttonStillPressed==false){
+             Serial.println("Button Pressed in Morse");
+             endMorse = true; 
+             break;
+          } else if(!digitalRead(DPIN_RLED_SW)){
+            buttonStillPressed=false;
+          }
+          Serial.println("Writing SYMBOL");
+          digitalWrite(DPIN_DRV_EN, HIGH);
+          if (curChar & 1)  // Dash - 3 beats
+          {  
+            currentMillis = millis();
+            previousMillis = 0;
+            while (previousMillis < millisPerBeat * 3 ){
+              previousMillis = millis() - currentMillis;
+               if (digitalRead(DPIN_RLED_SW) && buttonStillPressed==false){
+                 Serial.println("Button Pressed in Morse");
+                 endMorse = true; 
+                 break;
+               } else if(!digitalRead(DPIN_RLED_SW)){
+                 buttonStillPressed=false;
+               }
+            }
+            //delay(millisPerBeat * 3);
+          }
+          else              // Dot - 1 beat
+          {
+            currentMillis = millis();
+            previousMillis = 0;
+            while (previousMillis < millisPerBeat){
+               previousMillis = millis() - currentMillis;
+               if (digitalRead(DPIN_RLED_SW) && buttonStillPressed==false){
+                 Serial.println("Button Pressed in Morse");
+                 endMorse = true; 
+                 break;
+               } else if(!digitalRead(DPIN_RLED_SW)){
+                 buttonStillPressed=false;
+               } 
+            }
+            //delay(millisPerBeat);
+          }
+          digitalWrite(DPIN_DRV_EN, LOW);
+          // One beat between symbols
+          currentMillis = millis();
+          previousMillis = 0;
+          while (previousMillis < millisPerBeat){
+             previousMillis = millis() - currentMillis;
+             if (digitalRead(DPIN_RLED_SW) && buttonStillPressed==false){
+               Serial.println("Button Pressed in Morse");
+               endMorse = true; 
+               break;
+             } else if(!digitalRead(DPIN_RLED_SW)){
+               buttonStillPressed=false;
+             } 
+          }      
+          //delay(millisPerBeat);
+          curChar >>= 1;
+        }
+        // 3 beats between characters, but one already
+        // passed after the last symbol.
+        currentMillis = millis();
+        previousMillis = 0;
+        while (previousMillis < millisPerBeat * 2 ){
+           previousMillis = millis() - currentMillis;
+           if (digitalRead(DPIN_RLED_SW) && buttonStillPressed==false){
+             Serial.println("Button Pressed in Morse");
+             endMorse = true; 
+             break;
+           } else if(!digitalRead(DPIN_RLED_SW)){
+             buttonStillPressed=false;
+           }
+        }
+        //delay(millisPerBeat * 2);
+      } 
+    }
+    if (endMorse == true){
+      Serial.println("Leaving Morse");
+      pastMode = MODE_OFF;
+      mode = MODE_OFF;
+    }
     break;
   }
   
@@ -264,11 +379,15 @@ void loop()
   switch (mode)
   {
   case MODE_OFF:
+    if (endMorse == false){
     if (btnDown && !newBtnDown && (time-btnTime)>20)
-      newMode = MODE_LOW;
+        newMode = MODE_LOW;
     if (btnDown && newBtnDown && (time-btnTime)>500){
-      newMode = MODE_STROBE_PREVIEW;
-      pastMode = MODE_OFF;
+        newMode = MODE_STROBE_PREVIEW;
+        pastMode = MODE_OFF;
+      }
+    }else{
+      endMorse = false;
     }
     break;
   case MODE_LOW:
@@ -311,12 +430,22 @@ void loop()
     // This mode exists just to ignore this button release.
     if ((time-btnTime)< 250)
       newMode = MODE_STROBE;
+    if (tapped)
+      newMode = MODE_MORSE_PREVIEW;
     break;
   case MODE_STROBE:
-      //newMode = MODE_OFF;
-      newMode = pastMode;
-      pastModeReset = 0;
+    newMode = pastMode;
+    pastModeReset = 0;
     break;
+  case MODE_MORSE:
+    //if (btnDown && !newBtnDown)  // Button released
+    if (btnDown && !newBtnDown && (time-btnTime)>50)
+      newMode = MODE_OFF;
+    break;
+  case MODE_MORSE_PREVIEW:
+    newMode = MODE_MORSE;
+    break;  
+  
   }
 
   // Do the mode transitions
@@ -337,6 +466,7 @@ void loop()
       digitalWrite(DPIN_DRV_MODE, LOW);
       digitalWrite(DPIN_DRV_EN, LOW);
       pastModeReset = 1;
+      endMorse = false;
       break;
     case MODE_LOW:
       Serial.println("Mode = low");
@@ -362,6 +492,13 @@ void loop()
     case MODE_STROBE:
     case MODE_STROBE_PREVIEW:
       Serial.println("Mode = strobe");
+      pinMode(DPIN_PWR, OUTPUT);
+      digitalWrite(DPIN_PWR, HIGH);
+      digitalWrite(DPIN_DRV_MODE, HIGH);
+      break;
+    case MODE_MORSE:
+    case MODE_MORSE_PREVIEW:
+      Serial.println("Mode = Morse Code");
       pinMode(DPIN_PWR, OUTPUT);
       digitalWrite(DPIN_PWR, HIGH);
       digitalWrite(DPIN_DRV_MODE, HIGH);
