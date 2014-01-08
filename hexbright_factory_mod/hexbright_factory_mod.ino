@@ -6,6 +6,7 @@
 
 #include <math.h>
 #include <Wire.h>
+#include <EEPROM.h> 
 
 #define HOLD_TIME 250 // milliseconds before going to strobe
 #define OFF_TIME 650 // milliseconds before going off on the next normal button press
@@ -52,7 +53,8 @@ unsigned long lastButtonPress = millis();
 unsigned long lastChangeMode = millis();
 long previousMillis = 0;
 unsigned long currentMillis = 0;
-byte pastMode = 1;
+byte pastMode;
+byte StoredEEPROM = EEPROM.read(1);
 
 //Morse Code
 char message[] = "SOS  ";
@@ -146,7 +148,13 @@ void setup()
   btnTime = millis();
   btnDown = digitalRead(DPIN_RLED_SW);
   mode = MODE_OFF;
-
+  
+  if (StoredEEPROM > 5){
+    Serial.println("Writing to EEPROM");
+    EEPROM.write(1,0);
+  }
+  pastMode = EEPROM.read(1);
+  
   Serial.println("Powered up!");
 }
 
@@ -380,8 +388,12 @@ void loop()
   {
   case MODE_OFF:
     if (endMorse == false){
-    if (btnDown && !newBtnDown && (time-btnTime)>20)
+    if (btnDown && !newBtnDown && (time-btnTime)>20){
+      if (pastMode != 0)  
+        newMode = pastMode;
+      else
         newMode = MODE_LOW;
+    }
     if (btnDown && newBtnDown && (time-btnTime)>500){
         newMode = MODE_STROBE_PREVIEW;
         pastMode = MODE_OFF;
@@ -396,6 +408,7 @@ void loop()
         newMode = MODE_MED;
       else
         newMode = MODE_OFF;
+      pastMode = MODE_LOW;
     }
     if (btnDown && newBtnDown && (time-btnTime)>500){
       newMode = MODE_STROBE_PREVIEW;
@@ -405,9 +418,15 @@ void loop()
   case MODE_MED:
     if (btnDown && !newBtnDown && (time-btnTime)>50){
       if (millis()-lastChangeMode < 900)
-        newMode = MODE_HIGH;
-      else
+      {
+        if(pastMode != MODE_HIGH)
+          newMode = MODE_HIGH;
+        else
+          newMode = MODE_LOW;
+      } else 
         newMode = MODE_OFF;
+      pastMode = MODE_MED;
+      
     }
     if (btnDown && newBtnDown && (time-btnTime)>500){
       newMode = MODE_STROBE_PREVIEW;
@@ -417,9 +436,11 @@ void loop()
   case MODE_HIGH:
     if (btnDown && !newBtnDown && (time-btnTime)>50){
       if (millis()-lastChangeMode < 900)
-        newMode = MODE_LOW;
-      else
+        newMode = MODE_MED;
+      else 
         newMode = MODE_OFF;
+      pastMode = MODE_HIGH;
+      
     }
     if (btnDown && newBtnDown && (time-btnTime)>500){
       newMode = MODE_STROBE_PREVIEW;
@@ -465,6 +486,11 @@ void loop()
       digitalWrite(DPIN_PWR, LOW);
       digitalWrite(DPIN_DRV_MODE, LOW);
       digitalWrite(DPIN_DRV_EN, LOW);
+       if (StoredEEPROM != pastMode){
+          Serial.print("Writing to EEPROM: ");
+          Serial.println(pastMode);
+          EEPROM.write(1,pastMode);
+        }
       pastModeReset = 1;
       endMorse = false;
       break;
